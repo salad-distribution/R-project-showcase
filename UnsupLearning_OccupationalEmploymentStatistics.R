@@ -7,8 +7,13 @@ library(dendextend)
 library(dplyr)    ### for mutate() function
 library(tibble)   ### for rownames_to_column() function
 library(tidyr)    ### for gather() function
-# ggplot2 for advanced plot functionality
+# ggplot2, gridExtra for advanced plot functionality
 library(ggplot2)
+library(gridExtra)
+# purrr for map_dbl() function
+library(purrr)
+# cluster for pam() function
+library(cluster)
 
 # Data Source: Occupational Employment Statistics (OES) program THROUGH Data Camp
 # assign dimensions to vector
@@ -119,4 +124,89 @@ sorted_oes <- sort(cut_oes)
 oes_hclust_plot <- ggplot(gathered_oes, aes(x = year, y = mean_salary, color = factor(cluster))) +
   geom_line(aes(group = occupation))
 
+##########################
+### k-means Clustering ###
+##########################
+### find "best" value for k using total within-cluster sum of square Elbow Plot
+# run many models w/ varying (1:10) value of k (centers)
+# extract total within-cluster sum of squares for each model
+# store results as a vector
+tot_withinss <- map_dbl(1:10, function(k){
+  model <- kmeans(x = oes, centers = k)
+  model$tot.withinss
+})
 
+# generate a data frame containing both k (1:10) values and tot_withinss vector
+elbow_df <- data.frame(
+  k = 1:10,
+  tot_withinss = tot_withinss
+)
+
+# plot Elbow Plot to show relationship b/w k and total within-cluster sum of squares
+Elbow <- ggplot(elbow_df, aes(x = k, y = tot_withinss)) +
+  geom_line() + 
+  scale_x_continuous(breaks = 1:10)
+    ## Elbow Method suggests 2 clusters (k = 2; bend of elbow/scree is at k = 2)
+
+### find "best" value for k using Silhouette Widths
+# run many models w/ varying (2:10) value of k (centers) with pam() model function
+# extract Average Silhouette Width value for each model
+# store results as a vector
+sil_width <- map_dbl(2:10, function(k){
+  model <- pam(oes, k = k)
+  model$silinfo$avg.width
+})
+
+# generate a data frame containing both k and sil_width vector
+sil_df <- data.frame(
+  k = 2:10,
+  sil_width = sil_width
+)
+
+# plot relationship b/w k and silhouette width (sil_width vector) 
+Silh <- ggplot(sil_df, aes(x = k, y = sil_width)) +
+  geom_line() +
+  scale_x_continuous(breaks = 2:10)
+    ## Silhouette Width Method suggests 7 clusters (k = 7; maximum silhouette width is at k = 7)
+          ## k = 2 is second local peak
+          ## k = 3 is deepest trough
+
+### prepare kmeans clustering for exploration (target output is ready for ggplot input)
+# set seed for repeatability
+set.seed(5566)
+# Run kmeans clustering algorithm for both k values 
+  # (k = 2 from Elbow Plot, k = 7 from Silhouette Width Analysis)
+k2_kmeans <- kmeans(oes, centers = 2)
+k7_kmeans <- kmeans(oes, centers = 7)
+
+# append k = 2 cluster assignments to data frame as column - 'cluster'
+k2_oes <- mutate(df_oes, cluster = k2_kmeans$cluster)
+
+# append k = 7 cluster assignments to data frame as column - 'cluster'
+k7_oes <- mutate(df_oes, cluster = k7_kmeans$cluster)
+
+# create tidy data frame by gathering the year and values into two columns for both kmeans methods
+gathered_k2_oes <- gather(data = k2_oes,
+                          key = year,
+                          value = mean_salary,
+                          -occupation, -cluster)
+gathered_k7_oes <- gather(data = k7_oes,
+                          key = year,
+                          value = mean_salary,
+                          -occupation, -cluster)
+
+### Analyze resulting clusters
+# view cluster assignments by sorting the cluster assignment vector for each kmeans model
+sorted_k2_oes <- sort(k2_kmeans$cluster)
+sorted_k7_oes <- sort(k7_kmeans$cluster)
+
+# for both kmeans models, plot relationship b/w mean_salary and year for each occupation. Lines colored by assigned cluster
+oes_k2_plot <- ggplot(gathered_k2_oes, aes(x = year, y = mean_salary, color = factor(cluster))) +
+  geom_line(aes(group = occupation))
+oes_k7_plot <- ggplot(gathered_k7_oes, aes(x = year, y = mean_salary, color = factor(cluster))) +
+  geom_line(aes(group = occupation))
+
+### View 3 plots side by side
+grid.arrange(oes_k2_plot, oes_hclust_plot, oes_k7_plot, ncol = 3, top = "k = 2 (kmeans: Elbow), k = 3 (hclust), k = 7 (kmeans: Silhouette)") 
+  ## k = 3 produced by hierarchical clustering seems to yield clusters with the best separation between clusters
+  ## k = 3 produced by hierarchical clustering seems to yield clusters with most similar behavior/trends within clusters
